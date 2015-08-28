@@ -25,7 +25,7 @@ type Dog struct {
 ```
 For a Interface pointer or a private field, a proper setter is required to make injection working properly.
 And the setter is always the first priority to be chosen to inject dependency.
-Simply put "Set" in front of filed name as its setter.
+Simply put "Set" in front of the field's name as its setter.
 ```go
 func (d *Dog) SetIcat(icat interface{}) {
 	if origional, ok := icat.(ICat); ok {
