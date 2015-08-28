@@ -1,17 +1,24 @@
 # summer
 
-The "Summer" is a tiny dependency injection and autowiring package for GO language.
-It was deeply inspired by spring framework and try to implements some tiny portions of its functionality.
+The "summer" is a tiny dependency injection and autowiring package for GO language.
+It was deeply inspired by spring framework and try to implement some tiny portions of its functionality.
 
-### About "Summer"
+### About "summer"
 
 Being a beginner in writting something in Golang,
 I was searching for something similar to spring framework in Java's world ... 
-and, finally, I decided to write it myself. So, the "Summer" was born.
+and I ended up writing my own. So, the "summer" was born.
 
 Go and Java are quite diffent in many ways,
 and I have no idea whether "Inversion of Control" or "Dependency Injection"
 is idiomatic Go code should be use or how, so ... mimic other language might be a worse idea.
+
+### Installation
+
+To install summer, use go get:
+```
+go get github.com/blue-saber/summer
+```
 
 ### How to Use
 Add tag "@Autowired" on Fields (as following example) need a dependency injection.
