@@ -27,17 +27,23 @@ func PrintStruct(something interface{}) {
 	    f := s.Field(i)
 
 	    if f.CanInterface() {
-	    	fmt.Printf(">>   %d: %s %s = %v `%s`\n", i, 
+	    	fmt.Printf(">>   %d: %s %s = %v `%s`", i, 
 	    		typeOfT.Field(i).Name,
 	    		f.Type(),
 	    		f.Interface(),
 	    		typeOfT.Field(i).Tag)
 	    } else {
-	    	fmt.Printf(">>   %d: %s %s `%s`\n", i, 
+	    	fmt.Printf(">>   %d: %s %s `%s`", i, 
 	    		typeOfT.Field(i).Name, 
 	    		f.Type(),
 	    		typeOfT.Field(i).Tag)
 	    }
+
+	    if typeOfT.Field(i).Anonymous {
+			fmt.Println(" (embedded)");
+		} else {
+			fmt.Println("");
+		}
 	}
 }
 
@@ -85,7 +91,7 @@ func (ctx *Context) assignable(item *populateItem, modelType reflect.Type) bool 
 	return false
 }
 
-func (ctx *Context) iGet(modelType reflect.Type) (*populateItem, int) {
+func (ctx *Context) iGet(modelType reflect.Type, matchOne bool, callback func(item *populateItem)) (*populateItem, int) {
 	var rc *populateItem = nil
 	var autowiredRc *populateItem = nil
 	matched := 0
@@ -100,11 +106,14 @@ func (ctx *Context) iGet(modelType reflect.Type) (*populateItem, int) {
 			if item.beanType.Implements(modelType) {
 				matched++
 				if item.autowired {
-					autowiredRc = e.Value.(*populateItem)
+					if callback != nil {
+						callback (item)
+					}
+					autowiredRc = item
 				}
 
 				if rc == nil {
-					rc = e.Value.(*populateItem);
+					rc = item
 				} else {
 					duplicate = true
 				}
@@ -114,10 +123,13 @@ func (ctx *Context) iGet(modelType reflect.Type) (*populateItem, int) {
 			if item.beanType.Elem() == modelType {
 				matched++
 				if item.autowired {
-					autowiredRc = e.Value.(*populateItem)
+					if callback != nil {
+						callback (item)
+					}
+					autowiredRc = item
 				}
 				if rc == nil {
-					rc = e.Value.(*populateItem)
+					rc = item
 				} else {
 					duplicate = true
 				}
@@ -125,11 +137,13 @@ func (ctx *Context) iGet(modelType reflect.Type) (*populateItem, int) {
 		}
 
 		if duplicate {
-			if (matched == 2) {
-				fmt.Println("Multiple match for [", modelType, "]:")
-				fmt.Println(">> ", rc.beanType);
+			if matchOne {
+				if matched == 2 {
+					fmt.Println("Multiple match for [", modelType, "]:")
+					fmt.Println(">> ", rc.beanType);
+				}
+				fmt.Println(">> ", item.beanType);
 			}
-			fmt.Println(">> ", e.Value.(*populateItem).beanType);
 		}
 
 	}
@@ -138,7 +152,7 @@ func (ctx *Context) iGet(modelType reflect.Type) (*populateItem, int) {
 }
 
 func (ctx *Context) Get(intf interface{}) interface{} {
-	if item, matched := ctx.iGet(reflect.TypeOf(intf).Elem()); item != nil {
+	if item, matched := ctx.iGet(reflect.TypeOf(intf).Elem(), true, nil); item != nil {
 		if matched > 1 {
 			return nil
 		} else {
@@ -147,6 +161,28 @@ func (ctx *Context) Get(intf interface{}) interface{} {
 	} else {
 		return nil
 	}
+}
+
+func (ctx *Context) ForEach(intf interface{}, callback func(data interface{})) int {
+	rc := 0
+	ctx.iGet(reflect.TypeOf(intf).Elem(), false, func (item *populateItem) {
+		callback(item.bean)
+		rc++
+	})
+	return rc
+}
+
+func (ctx *Context) Each(callback func(data interface{})) int {
+	rc := 0
+	for e := ctx.items.Front(); e != nil; e = e.Next() {
+		item := e.Value.(*populateItem)
+
+		if item.autowired && callback != nil {
+			callback (item.bean)
+			rc++
+		}
+	}
+	return rc
 }
 
 func (ctx *Context) iGetByName(beanName string) (*populateItem,bool) {
@@ -171,22 +207,41 @@ func (ctx *Context) GetByName(beanName string) interface{} {
 	}
 }
 
-func (ctx *Context) autowireFieldByX(item *populateItem, setvalue bool, index int, byType bool, tag string) (bool,bool) {
+func (ctx *Context) autowireFieldByX(item *populateItem,
+		st reflect.Value, setvalue bool,
+		index int, tag string, level int) (bool,bool) {
 	settable := false
 	err := false
 
-	st := item.beanValue.Elem();
+	// st := item.beanValue.Elem();
 	field := st.Field(index)
 	f := st.Type().Field(index)
 
 	var match *populateItem
 
-	if (byType) {
+	// typeOfT.Field(i).Anonymous
+	switch {
+	case tag == "*": // Match any ... by type
 		cnt := 0;
-		if match, cnt = ctx.iGet(f.Type.Elem()); cnt > 1 {
+		if match, cnt = ctx.iGet(f.Type.Elem(), true, nil); cnt > 1 {
 			match, err = nil, true
 		}
-	} else {
+
+	case tag == "+":
+		if ! f.Anonymous {
+			match, err = nil, true
+			fmt.Println ("@Autowired(\"+\") only can be used on embedded field")
+		} else {
+			if tt, ww, err2 := ctx.doAutowire2(item, field, setvalue, level + 1); err2 {
+				match, err = nil, true
+			} else if tt == ww {
+				match, err, settable = nil, false, true
+			} else {
+				match, err = nil, true
+			}
+		}
+
+	default: // Match by name
 		if match, err = ctx.iGetByName(tag); match != nil {
 			if ! ctx.assignable(match, f.Type.Elem()) {
 				fmt.Println ("Autowiring by Name [", tag, "], but not match by type: ",
@@ -206,17 +261,16 @@ func (ctx *Context) autowireFieldByX(item *populateItem, setvalue bool, index in
 
 			if setvalue {
 				setter.Interface().(func (interface {}))(match.bean)
-				//fmt.Println("Autowire", f.Type, "via", setterName)
+				// fmt.Println("Autowire", f.Type, "via", setterName)
 			}
 		} else if field.CanSet() {
 			settable = true
 
 			if setvalue {
 				field.Set(match.beanValue)
-				//fmt.Println("Autowire", f.Type, "via field.Set")
+				// fmt.Println("Autowire", f.Type, "via field.Set")
 			}
 		} else {
-			PrintStruct(item.bean)
 			fmt.Println(f.Type, ": No setter or field not settable!")
 			err = true
 		}
@@ -225,17 +279,21 @@ func (ctx *Context) autowireFieldByX(item *populateItem, setvalue bool, index in
 	return settable, err
 }
 
-func (ctx *Context) doAutowire(item *populateItem, setvalue bool) (int, int, bool) {
+func (ctx *Context) doAutowire2(item *populateItem, st reflect.Value, setvalue bool, level int) (int, int, bool) {
 	wireableCounter := 0
 	totalCounter := 0
 
-	st := item.beanValue.Elem();
+	//st := item.beanValue.Elem();
+	// if level == 1 {
+	// 	PrintStruct(item.bean)
+	// }
 
     for i := 0; i < st.NumField(); i++ {
+    	
 		if tag := st.Type().Field(i).Tag.Get("@Autowired"); tag != "" {
 			totalCounter++
 
-			if settable,err := ctx.autowireFieldByX(item, setvalue, i, tag == "*", tag); err {
+			if settable,err := ctx.autowireFieldByX(item, st, setvalue, i, tag, level); err {
 				return totalCounter, wireableCounter, err
 			} else if settable {
 				wireableCounter++
@@ -243,6 +301,10 @@ func (ctx *Context) doAutowire(item *populateItem, setvalue bool) (int, int, boo
 		}
     }
     return totalCounter, wireableCounter, false
+}
+
+func (ctx *Context) doAutowire(item *populateItem, setvalue bool) (int, int, bool) {
+	return ctx.doAutowire2(item, item.beanValue.Elem(), setvalue, 1)
 }
 
 func (ctx *Context) Autowiring(callback func(err bool)) chan bool {
@@ -260,7 +322,7 @@ func (ctx *Context) Autowiring(callback func(err bool)) chan bool {
 				for e := ctx.items.Front(); e != nil; e = e.Next() {
 					if item, ok := e.Value.(*populateItem); ok {
 						if ! item.autowired {
-							if total, wireable,err := ctx.doAutowire(item, false); err {
+							if total, wireable, err := ctx.doAutowire(item, false); err {
 								pendingRequest = true
 								break wiringLoop
 							} else if total == 0 {
@@ -277,6 +339,7 @@ func (ctx *Context) Autowiring(callback func(err bool)) chan bool {
 								}
 								wireSomething = true
 							} else {
+								fmt.Println("total vs wireable = ", total, ":", wireable)
 								// fmt.Println("Pending: ", total, wireable, item)
 								pendingRequest = true
 							}
