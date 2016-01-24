@@ -339,7 +339,7 @@ func (ctx *Context) Autowiring(callback func(err bool)) chan bool {
 								}
 								wireSomething = true
 							} else {
-								fmt.Println("total vs wireable = ", total, ":", wireable)
+								// fmt.Println("total vs wireable = ", total, ":", wireable)
 								// fmt.Println("Pending: ", total, wireable, item)
 								pendingRequest = true
 							}
